@@ -1,0 +1,157 @@
+version: "3.7"
+
+volumes:
+    kong_data: {}
+    kong_prefix_vol:
+        driver_opts:
+            type: tmpfs
+            device: tmpfs
+    kong_tmp_vol:
+        driver_opts:
+            type: tmpfs
+            device: tmpfs
+
+networks:
+    kong-net:
+        external: true
+
+services:
+    konga-prepare:
+        image: pantsel/konga:next
+        command: "-c prepare -a postgres -u postgresql://kongUsername:kongPassword@db:5432/konga"
+        networks:
+            - kong-net
+        restart: on-failure
+        links:
+            - db
+        depends_on:
+            - db
+
+    konga:
+        image: pantsel/konga:latest
+        environment:
+            TOKEN_SECRET: kongRandomToken
+            DB_ADAPTER: postgres
+            DB_HOST: db
+            DB_PORT: 5432
+            DB_USER: kongUsername
+            DB_PASSWORD: kongPassword
+            DB_DATABASE: konga
+            NODE_ENV: production
+        depends_on:
+            - db
+            - kong
+        networks:
+            - kong-net
+        ports:
+            - "1337:1337"
+        restart: on-failure:5
+        deploy:
+            restart_policy:
+                delay: 50s
+                condition: on-failure
+                max_attempts: 5
+                window: 10s
+
+    kong-migrations:
+        image: kong:2.4-alpine
+        command: kong migrations bootstrap
+        depends_on:
+            - db
+        environment:
+            KONG_DATABASE: postgres
+            KONG_PG_DATABASE: kong
+            KONG_PG_HOST: db
+            KONG_PG_USER: kongUsername
+            KONG_PG_PASSWORD: kongPassword
+        networks:
+            - kong-net
+        restart: on-failure
+        deploy:
+            restart_policy:
+                condition: on-failure
+
+    kong-migrations-up:
+        image: kong:2.4-alpine
+        command: kong migrations up && kong migrations finish
+        depends_on:
+            - db
+        environment:
+            KONG_DATABASE: postgres
+            KONG_PG_DATABASE: kong
+            KONG_PG_HOST: db
+            KONG_PG_USER: kongUsername
+            KONG_PG_PASSWORD: kongPassword
+        networks:
+            - kong-net
+        restart: on-failure
+        deploy:
+            restart_policy:
+                condition: on-failure
+
+    kong:
+        build:
+          context: .
+          dockerfile: Dockerfile
+        user: kong
+        depends_on:
+            - db
+        environment:
+            KONG_LOG_LEVEL: debug
+            KONG_ADMIN_ACCESS_LOG: /dev/stdout
+            KONG_ADMIN_ERROR_LOG: /dev/stderr
+            KONG_PROXY_ERROR_LOG: /dev/stderr
+            KONG_PROXY_ACCESS_LOG: /dev/stdout log_oap_format
+            KONG_NGINX_HTTP_LOG_FORMAT: log_oap_format escape=json '{"timestamp":"$msec","server_name":"$server_name","time_local":"$time_local","remote_addr":"$remote_addr","server_addr":"$server_addr","scheme":"$scheme","host":"$host","status_code":$status,"request_method":"$request_method","uri":"$uri","request_uri":"$request_uri","query_string":"$query_string","server_protocol":"$server_protocol","bytes_sent":$bytes_sent,"body_bytes_sent":$body_bytes_sent,"request_length":$request_length,"http_referrer":"$http_referer","http_user_agent":"$http_user_agent","request_time":"$request_time","request_id":"$request_id","upstream_response_time":"$upstream_response_time","upstream_addr":"$upstream_addr","http_content_type":"$sent_http_content_type","upstream_host":"$upstream_host"}'
+            KONG_PROXY_LISTEN: 0.0.0.0:8000
+            KONG_ADMIN_LISTEN: 0.0.0.0:8001
+            KONG_CASSANDRA_CONTACT_POINTS: db
+            KONG_DATABASE: postgres
+            KONG_PG_DATABASE: kong
+            KONG_PG_HOST: db
+            KONG_PG_USER: kongUsername
+            KONG_PG_PASSWORD: kongPassword
+        networks:
+            - kong-net
+        ports:
+            - 8000:8000
+            - 8001:8001
+            - 8444:8444
+        healthcheck:
+            test: ["CMD", "kong", "health"]
+            interval: 10s
+            timeout: 10s
+            retries: 10
+        restart: on-failure:5
+        read_only: false
+        deploy:
+            restart_policy:
+                delay: 50s
+                condition: on-failure
+                max_attempts: 5
+                window: 10s
+        security_opt:
+            - no-new-privileges
+
+    db:
+        image: postgres:10.4
+        environment:
+            POSTGRES_DB: kong
+            POSTGRES_USER: kongUsername
+            POSTGRES_PASSWORD: kongPassword
+        healthcheck:
+            test: ["CMD", "pg_isready", "-U", "postgres"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+        restart: on-failure
+        deploy:
+            restart_policy:
+                condition: on-failure
+        stdin_open: true
+        tty: true
+        networks:
+            - kong-net
+        volumes:
+            - kong_data:/var/lib/postgresql/data
+            

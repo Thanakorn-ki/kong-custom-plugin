@@ -1,0 +1,18 @@
+_format_version: "1.1"
+_info:
+  select_tags:
+    - DEMO-Plugin
+services:
+- host: host.docker.internal
+  name: demo-service
+  port: 9999
+  protocol: http
+  routes:
+  - name: demo-server-api
+    paths:
+      - /test
+plugins:
+- name: custom-plugin
+  service: demo-service
+  config:
+    msg: hey-demo-plugins
